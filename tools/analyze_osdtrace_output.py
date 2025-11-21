@@ -5,6 +5,7 @@ high-latency operations and print fio-style output.
 """
 
 import argparse
+from json import dumps
 import re
 import statistics
 import sys
@@ -176,13 +177,14 @@ def group_by_osd_and_op(
 
 
 # pylint: disable=too-many-locals
-def infer(data: list) -> None:
+def infer(data: list) -> dict:
     """Infer % contributions from latency fields.
 
     Args:
         data: List of parsed osdtrace lines.
     """
     results = {}
+    final_results = {}
 
     for trace in data:
         # group by osd
@@ -205,9 +207,10 @@ def infer(data: list) -> None:
                     )
 
     for osd_id, ops in sorted(results.items()):
-        print(f"osd.{osd_id}:")
+        osd = f"osd.{osd_id}"
+        final_results[osd] = {}                                                   
         for op_type, fields in ops.items():
-            print(f"  {op_type}:")
+            final_results[osd][op_type] = {}
 
             field_to_contribution = {}
             for field, contributions in fields.items():
@@ -216,15 +219,29 @@ def infer(data: list) -> None:
             sorted_fields = sorted(
                 field_to_contribution.items(),
                 key=lambda item: item[1],
-                reverse=True
+                reverse=True,
             )
 
-            max_width = len(f"{sorted_fields[0][1]:.2f}")
             for field, avg_contribution in sorted_fields:
-                avg_cont_str = f"{avg_contribution:.2f}"
-                leading_spaces = " " * (max_width - len(avg_cont_str))
-                print(f"    {leading_spaces}{avg_cont_str}% from {field}")
+                final_results[osd][op_type][field] = f"{avg_contribution:.2f}%"
 
+    return final_results
+
+
+def print_infer_results(final_results: dict) -> None:
+    """Print inferred percentage contributions from latency fields.
+
+    Args:
+        final_results: Dictionary of inferred results.
+    """
+    for osd_id, ops in final_results.items():
+        print(f"osd.{osd_id}:")
+        for op_type, fields in ops.items():
+            print(f"  {op_type}:")
+            max_width = len(f"{list(fields.values())[0]}")
+            for field, avg_contribution in fields.items():
+                leading_spaces = " " * (max_width - len(avg_contribution))
+                print(f"    {leading_spaces}{avg_contribution} from {field}")
         print()
 
 
@@ -376,7 +393,11 @@ def run(margs) -> None:
     if margs.sort:
         sort(threshold_filtered_data, margs.show_in_ms, margs.field)
     elif margs.infer:
-        infer(threshold_filtered_data)
+        final_results = infer(threshold_filtered_data)
+        if margs.json:
+            print(dumps(final_results, indent=2))
+        else:
+            print_infer_results(final_results)
     else:
         analyze(threshold_filtered_data, margs.show_in_ms, margs.field)
 
@@ -435,6 +456,12 @@ def create_arg_parser():
         """, # noqa
         type=int,
     )
+    parser.add_argument(
+        "-j",
+        "--json",
+        help="Output results in JSON format",
+        action="store_true",
+    )   
     return parser
 
 
